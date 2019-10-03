@@ -12,13 +12,13 @@ import numpy as np
 from model import yolov3
 from utils.misc_utils import parse_anchors, load_weights
 
-num_class = 80
+num_class = 1
 img_size = 416
 weight_path = './data/darknet_weights/yolov3.weights'
 save_path = './data/darknet_weights/yolov3.ckpt'
 anchors = parse_anchors('./data/yolo_anchors.txt')
 
-model = yolov3(80, anchors)
+model = yolov3(1, anchors)
 with tf.Session() as sess:
     inputs = tf.placeholder(tf.float32, [1, img_size, img_size, 3])
 

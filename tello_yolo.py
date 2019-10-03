@@ -23,6 +23,8 @@ from tracker import Tracker
 from djitellopy import Tello
 from PIL import Image
 
+
+
 #forces tensorflow to run on CPU
 #os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
@@ -54,7 +56,9 @@ color_table = get_color_table(args.num_class)
 def main(_):
    
   tellotrack = TelloCV()
-  
+
+
+
   with tf.Graph().as_default():
     width, height = args.new_size[0], args.new_size[1]
 
@@ -76,19 +80,19 @@ def main(_):
 
         saver = tf.train.Saver()
         saver.restore(sess, args.restore_path)
-        #ratio = min(416/960, 416/720)
+
+        tellotrack.drone.takeoff()
+
+        find_pad = False
+        landing = False
+                
         while True:
-           # if tellotrack.upup :
-            #    tellotrack.move_up()
             img_ori = tellotrack.process_frame()
-            #if tellotrack.upup :
-            #    tellotrack.move_up()
 
             print("IMG SHAPE : ", img_ori.shape)
             img = cv2.resize(img_ori, (width, height))
             print("RESIZE IMg SHAPE : ", img.shape)
             img=np.asarray(img, np.float32)
-            img = np.rot90(img, 3)
             img = img[np.newaxis, :] / 255.
             print("EXPAND IMG SHAPE : ", img.shape)
             print(img.shape)
@@ -98,16 +102,54 @@ def main(_):
             boxes_, scores_, labels_ = sess.run([boxes, scores, labels], feed_dict={input_data: img})
             print(boxes_)
             end = time.time()
-            #dw = int((img_ori.shape[0]-width) / 2)
-            #dh = int((img_ori.shape[1]-height) / 2)
-            boxes_[:, [0, 2]] *= (img_ori.shape[0]/float(width))
-            boxes_[:, [1, 3]] *= (img_ori.shape[1]/float(height))
-            #boxes_[:, [0, 2]] = (boxes_[:,[0,2]] - dw) / ratio 
-            #boxes_[:, [1, 3]] = (boxes_[:, [1,3]] - dh) / ratio 
-            print(boxes_)
+            boxes_[:, [0, 2]] *= (img_ori.shape[1]/float(width))
+            boxes_[:, [1, 3]] *= (img_ori.shape[0]/float(height))
+
+            
             for i in range(len(boxes_)):
               x0, y0, x1, y1 = boxes_[i]
-              plot_one_box(img_ori, [x0, y0, x1, y1], label=args.classes[labels_[i]] + ', {:.2f}%'.format(scores_[i] * 100), color=color_table[labels_[i]])
+              #plot_one_box(img_ori, [x0, y0, x1, y1], label=args.classes[labels_[i]] + ', {:.2f}%'.format(scores_[i] * 100), color=color_table[labels_[i]])
+              if labels_[i] == 0: #56 chair 11 stopsign 0 person 74 clock
+                print("-------------------------------------FIND-----")
+                plot_one_box(img_ori, [x0,y0,x1,y1], label=args.classes[labels_[i]] + ', {:.2f}%'.format(scores_[i] * 100), color = color_table[labels_[i]])
+
+                '''
+                move tello to center of object
+                move_done = tellotrack.track_mid((x1+x0) / 2, (y1+y0) / 2)
+                if move_done:
+                    tellotrack.drone.land()
+
+                '''
+
+                # move left and find mission pad, landing.
+                if int(x1-x0) > 200 and find_pad == False:
+                    #tellotrack.move_left()
+                    #time.sleep(3)
+                    #tellotrack.move_left()
+                    #time.sleep(3)
+                    tellotrack.drone.send_control_command("mon")
+                    tellotrack.drone.send_control_command("mdirection 0")
+                    find_pad = True
+                else:
+                    tellotrack.go()
+                    time.sleep(3)
+
+            if find_pad and landing is False:
+                response = tellotrack.drone.get_current_state_all()
+                print(response)
+                time.sleep(5)
+                response = tellotrack.drone.send_control_command("go 0 0 70 30 m2")
+                time.sleep(5)
+                if response is False:
+                    tellotrack.go_slow()
+                else:
+                    landing = True
+
+            if landing:
+                tellotrack.landing()
+                time.sleep(5)
+                tellotrack.take_off()
+                landing = False
 
             cv2.imshow('YOLO', img_ori)
 
@@ -143,8 +185,8 @@ class TelloCV(object):
         self.tracking = False
         self.keydown = False
         self.date_fmt = '%Y-%m-%d_%H%M%S'
-        self.speed = 30
-        self.takeoff_speed = 90
+        self.speed = 50
+        self.go_speed = 90
         self.drone = Tello()
         self.init_drone()
         self.init_controls()
@@ -170,7 +212,7 @@ class TelloCV(object):
         self.tracker = Tracker(960,
                                720,
                                blue_lower, upper_blue)
-
+        self.speed_list = [5, 10, 15, 20, 25]
     def init_drone(self):
         """Connect, uneable streaming and subscribe to events"""
         # self.drone.log.set_level(2)
@@ -266,12 +308,25 @@ class TelloCV(object):
         #if self.record:
         #    self.record_vid(frame)
         return frame
-    def take_off(self):
-        self.drone.takeoff()
                
     def move_up(self):
         self.drone.move_up(self.speed)
-        
+    
+    def take_off(self):
+        self.drone.takeoff()
+    
+    def go(self):
+        self.drone.move_forward(self.go_speed)
+    def move_left(self):
+        self.drone.move_left(self.go_speed) # speed 테스트해서 조절하기
+    def go_window9(self):
+        self.drone.move_forward()
+    def rotate_right(self):
+        self.drone.rotate_clockwise()
+    def rotate_left(self):
+        self.drone.rotate_counter_clockwise()
+    def landing(self):
+        self.drone.land()
 
     def tracking_f(self,image):
         #if upup : 
@@ -444,8 +499,43 @@ class TelloCV(object):
         with open(path, 'wb') as out_file:
             out_file.write(data)
         print('Saved photo to %s' % path)
+       
+    def enable_mission_pads1(self):
+        self.drone.mon()
+    def disable_mission_pads1(self):
+        self.drone.moff()
+    def go_xyz_speed_mid1(self,x,y,z, speed, mid):
+        self.drone.go_x_y_z_speed_mid(x,y,z,speed,mid)
 
+    #  if function return True, set drone center to object's center
+    def track_mid(self, x, y):
+        midx, midy = 480, 360
+        distance_x = abs(midx - x)
+        distance_y = abs(midy - y)
+        print(x, y, distance_x, distance_y)
+        speed_index_x = int(distance_x % 10) - 1
+        if speed_index_x > 4:
+            speed_index_x = 4
+        speed_index_y = int(distance_y % 10) - 1
+        if speed_index_y > 4:
+            speed_index_y =4
+        move_done = True
+        if y > midy:
+            self.drone.move_down(self.speed_list[speed_index_y])
+            move_done = False
+        elif y < midy:
+            self.drone.move_up(self.speed_list[speed_index_y])
+            move_done = False
+        elif x > midx:
+            self.drone.move_left(self.speed_list[speed_index_x])
+            move_done = False
+        elif x < midx:
+            self.drone.move_right(self.speed_list[speed_index_x])
+            move_done = False
+        return move_done
 
+    def go_slow(self):
+        self.drone.move_forward(30)
 
 
 if __name__ == '__main__':
