@@ -13,7 +13,6 @@ from utils.nms_utils import gpu_nms
 from utils.plot_utils import get_color_table, plot_one_box
 from utils.data_aug import letterbox_resize
 
-
 import tellopy
 import numpy
 import av
@@ -23,10 +22,8 @@ from tracker import Tracker
 from djitellopy import Tello
 from PIL import Image
 
-
-
-#forces tensorflow to run on CPU
-#os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+# forces tensorflow to run on CPU
+# os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
 parser = argparse.ArgumentParser(description='Argument parser')
 
@@ -51,26 +48,28 @@ args.num_class = len(args.classes)
 
 color_table = get_color_table(args.num_class)
 
-#upup = True 
+
+# upup = True
 
 def main(_):
-   
     tellotrack = TelloCV()
 
     mission = 0
     find_object = 74
     bottle = 39
 
+    move_up = 0
+
     with tf.Graph().as_default():
         width, height = args.new_size[0], args.new_size[1]
 
-        #print(tellotrack.takeoff_time)
+        # print(tellotrack.takeoff_time)
 
-        #tellotrack.take_off()
-        #time.sleep(3)
+        # tellotrack.take_off()
+        # time.sleep(3)
 
         with tf.Session() as sess:
-            input_data = tf.placeholder(tf.float32,[1, width, height, 3], name='input_data')
+            input_data = tf.placeholder(tf.float32, [1, width, height, 3], name='input_data')
 
             yolo_model = yolov3(args.num_class, args.anchors)
 
@@ -80,24 +79,25 @@ def main(_):
 
             pred_scores = pred_confs * pred_probs
 
-            boxes, scores, labels = gpu_nms(pred_boxes, pred_scores, args.num_class, max_boxes=200, score_thresh=0.7, nms_thresh=0.7)
+            boxes, scores, labels = gpu_nms(pred_boxes, pred_scores, args.num_class, max_boxes=200, score_thresh=0.7,
+                                            nms_thresh=0.7)
 
             saver = tf.train.Saver()
             saver.restore(sess, args.restore_path)
 
             tellotrack.take_off()
             time.sleep(3)
-            #tellotrack.drone.move_up(50)
-            #time.sleep(3)
+            # tellotrack.drone.move_up(50)
+            # time.sleep(3)
 
             flag = False
-            rotate_flag = False
+            landing_flag = True
 
             while True:
                 img_ori = tellotrack.process_frame()
 
                 img = cv2.resize(img_ori, (width, height))
-                img=np.asarray(img, np.float32)
+                img = np.asarray(img, np.float32)
                 img = img[np.newaxis, :] / 255.
 
                 start = time.time()
@@ -105,8 +105,8 @@ def main(_):
                 boxes_, scores_, labels_ = sess.run([boxes, scores, labels], feed_dict={input_data: img})
                 print(boxes_)
                 end = time.time()
-                boxes_[:, [0, 2]] *= (img_ori.shape[1]/float(width))
-                boxes_[:, [1, 3]] *= (img_ori.shape[0]/float(height))
+                boxes_[:, [0, 2]] *= (img_ori.shape[1] / float(width))
+                boxes_[:, [1, 3]] *= (img_ori.shape[0] / float(height))
 
                 if mission == 0:  # find clock and move left
                     print(mission, " Start")
@@ -114,11 +114,14 @@ def main(_):
                         x0, y0, x1, y1 = boxes_[i]
                         if labels_[i] == find_object:  # 56 chair 11 stopsign 0 person 74 clock
                             print("-------------------------------------FIND-----")
-                            plot_one_box(img_ori, [x0,y0,x1,y1], label=args.classes[labels_[i]] + ', {:.2f}%'.format(scores_[i] * 100), color = color_table[labels_[i]])
+                            plot_one_box(img_ori, [x0, y0, x1, y1],
+                                         label=args.classes[labels_[i]] + ', {:.2f}%'.format(scores_[i] * 100),
+                                         color=color_table[labels_[i]])
                             # move left and find mission pad, landing.
-                            if int(x1-x0) > 200:
+                            if int(x1 - x0) > 200:
                                 tellotrack.move_left()
                                 time.sleep(5)
+                                tellotrack.drone.move_down(30)
                                 mission = 1
                             else:  # getting closer to object
                                 tellotrack.go()
@@ -126,7 +129,7 @@ def main(_):
                     if find_object not in labels_:
                         tellotrack.go()
                         time.sleep(5)
-                elif mission == 1: # find bottle and landing
+                elif mission == 1:  # find bottle and landing
                     print(mission, " Start")
                     for i in range(len(boxes_)):
                         x0, y0, x1, y1 = boxes_[i]
@@ -138,7 +141,7 @@ def main(_):
 
                             # x1-x0 > 70 -> 120cm
                             # x1-x0 > 50 -> 200cm
-                            if int(x1-x0) > 50:
+                            if int(x1 - x0) > 50:
                                 mid_x = (x1 + x0) / 2
                                 done = tellotrack.track_x(mid_x)
                                 time.sleep(5)
@@ -147,8 +150,12 @@ def main(_):
                                     tellotrack.landing()
                                     time.sleep(5)
                                     tellotrack.take_off()
-                                    time\
-                                        .sleep(5)
+                                    time.sleep(5)
+                                    # if landing_flag:
+                                    # window high
+                                    # tellotrack.drone.move_up(50)
+                                    # window low
+                                    # tellotrack.drone.move_down(50)
                                     if flag is False:
                                         mission += 1
                                     else:
@@ -159,23 +166,25 @@ def main(_):
                     if bottle not in labels_:
                         tellotrack.drone.move_forward(30)
                         time.sleep(3)
-                elif mission == 2: # find clock and tracking, go through the window
+                elif mission == 2:  # find clock and tracking, go through the window
                     print(mission, " Start")
                     length = []
                     index = []
                     for i in range(len(boxes_)):
                         x0, y0, x1, y1 = boxes_[i]
-                        if labels_[i] == find_object: #56 chair 11 stopsign 0 person 74 clock
+                        if labels_[i] == find_object:  # 56 chair 11 stopsign 0 person 74 clock
                             print("-------------------------------------FIND-----")
-                            plot_one_box(img_ori, [x0,y0,x1,y1], label=args.classes[labels_[i]] + ', {:.2f}%'.format(scores_[i] * 100), color = color_table[labels_[i]])
-                            length.append(x1-x0)
+                            plot_one_box(img_ori, [x0, y0, x1, y1],
+                                         label=args.classes[labels_[i]] + ', {:.2f}%'.format(scores_[i] * 100),
+                                         color=color_table[labels_[i]])
+                            length.append(x1 - x0)
                             index.append(i)
                             # move left and find mission pad, landing
                     if len(length) > 0:
                         max_length = max(length)
                         max_index = index[length.index(max_length)]
                         x0, y0, x1, y1 = boxes_[max_index]
-                        if int(x1-x0) > 150:
+                        if int(x1 - x0) > 150:
                             center_x = (x0 + x1) / 2
                             center_y = (y0 + y1) / 2
                             done = tellotrack.track_mid(center_x, center_y)
@@ -190,7 +199,7 @@ def main(_):
                     else:
                         tellotrack.drone.move_forward(30)
                         time.sleep(3)
-                elif mission == 3: # find clock and rotate clockwise or counter-clockwise
+                elif mission == 3:  # find clock and rotate clockwise or counter-clockwise
                     print(mission, " Start")
                     for i in range(len(boxes_)):
                         x0, y0, x1, y1 = boxes_[i]
@@ -200,17 +209,26 @@ def main(_):
                                          label=args.classes[labels_[i]] + ', {:.2f}%'.format(scores_[i] * 100),
                                          color=color_table[labels_[i]])
                             # move left and find mission pad, landing.
-                            if int(x1-x0) > 200: #clock size 180 : 160 cm
+                            if int(x1 - x0) > 200:  # clock size 180 : 160 cm
                                 if flag is False:
                                     tellotrack.drone.rotate_clockwise(90)
-                                    time.sleep(3)
+                                    time.sleep(5)
+                                    # if window 2 low
+                                    # tellotrack.drone.move_down(50)
+                                    # time.sleep(5)
+                                    # if window 2 high
+                                    tellotrack.drone.move_up(100)
+                                    time.sleep(5)
                                     mission = 2
                                     flag = True
                                     break
                                 else:
                                     tellotrack.drone.rotate_counter_clockwise(90)
                                     time.sleep(5)
+                                    # if window too high, change 50 -> others
                                     tellotrack.drone.move_down(50)
+                                    # if window too low
+                                    # tellotrack.drone.move_up(50)
                                     time.sleep(5)
                                     mission = 1
                                     break
@@ -227,7 +245,7 @@ def main(_):
                         else:
                             tellotrack.drone.move_forward(40)
                             time.sleep(3)
-                elif mission == 4: # finish
+                elif mission == 4:  # finish
                     print(mission, " Start")
                     tellotrack.drone.move_forward(200)
                     time.sleep(5)
@@ -241,20 +259,18 @@ def main(_):
                 if k == 1048603 or k == 27:
                     break  # esc to quit
                 if k == 1048688:
-                    cv2.waitKey(0) # 'p' to pause
-                if k == ord('h') :
-                    tellotrack.tracking = True # 'h' to use tracking
+                    cv2.waitKey(0)  # 'p' to pause
+                if k == ord('h'):
+                    tellotrack.tracking = True  # 'h' to use tracking
                     tellotrack.track_cmd = ""
 
                 print("Time: " + str(end - start))
                 del img
                 del img_ori
-        #del toShow
-
-#cam.release()
+        # del toShow
 
 
-
+# cam.release()
 
 
 class TelloCV(object):
@@ -274,7 +290,7 @@ class TelloCV(object):
         self.drone = Tello()
         self.init_drone()
         self.init_controls()
-        
+
         self.battery = self.drone.get_battery()
         self.frame_read = self.drone.get_frame_read()
         self.forward_time = 0
@@ -284,14 +300,14 @@ class TelloCV(object):
         self.command_flag = False
 
         # trackingimport libh264decoder a color
-        #green_lower = (30, 50, 50)
-        #green_upper = (80, 255, 255)
-        #red_lower = (0, 50, 50)
-        #red_upper = (20, 255, 255)
-        blue_lower = np.array([0,0,0])
-        upper_blue = np.array([255,255,180])
-        bh_lower = (180,30,100)
-        bh_upper=(275,50,100)
+        # green_lower = (30, 50, 50)
+        # green_upper = (80, 255, 255)
+        # red_lower = (0, 50, 50)
+        # red_upper = (20, 255, 255)
+        blue_lower = np.array([0, 0, 0])
+        upper_blue = np.array([255, 255, 180])
+        bh_lower = (180, 30, 100)
+        bh_upper = (275, 50, 100)
         self.track_cmd = ""
         self.tracker = Tracker(960,
                                720,
@@ -360,7 +376,7 @@ class TelloCV(object):
             'Key.up': lambda speed: self.drone.move_up(speed),
             'Key.down': lambda speed: self.drone.move_down(speed),
             'Key.tab': lambda speed: self.drone.takeoff(),
-            #'Key.tab': self.drone.takeoff(60),
+            # 'Key.tab': self.drone.takeoff(60),
             'Key.backspace': lambda speed: self.drone.land(),
             'p': lambda speed: self.palm_land(speed),
             't': lambda speed: self.toggle_tracking(speed),
@@ -375,25 +391,25 @@ class TelloCV(object):
 
     def process_frame(self):
         """convert frame to cv2 image and show"""
-        #print("TRACKING START")
+        # print("TRACKING START")
         frame = self.frame_read.frame
-        #self.drone.move_up(self.speed)
-        #image = self.write_hud(image)
-        #if self.record:
+        # self.drone.move_up(self.speed)
+        # image = self.write_hud(image)
+        # if self.record:
         #    self.record_vid(frame)
         return frame
-               
+
     def move_up(self):
         self.drone.move_up(self.speed)
-    
+
     def take_off(self):
         self.drone.takeoff()
-    
+
     def go(self):
         self.drone.move_forward(self.go_speed)
 
     def move_left(self):
-        self.drone.move_left(270) # speed 테스트해서 조절하기
+        self.drone.move_left(270)  # speed 테스트해서 조절하기
 
     def go_window9(self):
         self.drone.move_forward()
@@ -517,7 +533,7 @@ class TelloCV(object):
         with open(path, 'wb') as out_file:
             out_file.write(data)
         print('Saved photo to %s' % path)
-       
+
     def enable_mission_pads(self):
         self.drone.enable_mission_pads()
 
@@ -564,6 +580,7 @@ class TelloCV(object):
 
     def go_fast(self):
         self.drone.move_forward(200)
+
 
 if __name__ == '__main__':
     tf.app.run()
